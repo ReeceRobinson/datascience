@@ -160,18 +160,23 @@ try:
     low_bin = math.floor(low / delta_f)
 
     def run_inferencing():
+        
+        def normalize_with_paras(test, mean, std):
+            test = (test - mean) / std
+            return test
+
         # run the trained RNN model for keyword spotting
-        model_file = r'./saved models/kws-100/kws_model-85-20170906102155.ckpt.meta'
-        params_file = r'./saved models/kws-100/kws_model-85-20170906102155.ckpt'
+        model_file = r'kws_model-85-20170906102155.ckpt.meta'
+        params_file = r'kws_model-85-20170906102155.ckpt'
 
         # Model Parameters
         n_steps = 36
         n_inputs = 40
-        num = 1
+
         mean = -25.664221
         std = 10.932781
 
-        X_raw = mel_ring.get_mels().reshape(num,n_steps,n_inputs)
+        X_raw = mel_ring.get_mels().reshape(1,n_steps,n_inputs)
 
         saver = tf.train.import_meta_graph(model_file)
 
