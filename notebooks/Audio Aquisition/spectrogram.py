@@ -8,6 +8,7 @@ import librosa
 import time
 import sounddevice as sd
 import sys
+import tensorflow as tf
 
 class RingBuffer:
     """
@@ -62,6 +63,9 @@ class ResultRingBuffer:
     def get_mels_for_window(self, num_mels):
         return self.ring_buffer[:num_mels][::-1]
 
+    def get_mels(self):
+        return self.ring_buffer[:][::-1]
+
     def save_ring_buffer(self, filename="mel_ring_buffer.txt"):
         np.savetxt(filename,self.ring_buffer[::-1])
 #
@@ -88,7 +92,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('-l', '--list-devices', action='store_true',
                     help='list audio devices and exit')
 parser.add_argument('-b', '--block-duration', type=float,
-                    metavar='DURATION', default=25,
+                    metavar='DURATION', default=100,
                     help='block size (default %(default)s milliseconds)')
 parser.add_argument('-c', '--columns', type=int, default=columns,
                     help='width of spectrogram')
@@ -116,8 +120,8 @@ except Exception as e:
 target_window_length = 3.5 # seconds
 mel_resample_rate = 16000
 num_mels = 40
-mel_stride = 0.01
-mel_width = 0.025
+mel_stride = 0.1
+mel_width = 0.1
 mel_ring_size = int((target_window_length / mel_stride) + 1)
 
 mel_ring = ResultRingBuffer(mel_ring_size, num_mels)
@@ -157,7 +161,28 @@ try:
 
     def run_inferencing():
         # run the trained RNN model for keyword spotting
-        pass
+        model_file = r'./saved models/kws-100/kws_model-85-20170906102155.ckpt.meta'
+        params_file = r'./saved models/kws-100/kws_model-85-20170906102155.ckpt'
+
+        # Model Parameters
+        n_steps = 36
+        n_inputs = 40
+        num = 1
+        mean = -25.664221
+        std = 10.932781
+
+        X_raw = mel_ring.get_mels().reshape(num,n_steps,n_inputs)
+
+        saver = tf.train.import_meta_graph(model_file)
+
+        with tf.Session() as sess:
+            saver.restore(sess, params_file)
+            predicted = tf.get_collection("predicted")[0]
+            X = tf.get_collection("X")[0]
+            X_feed = normalize_with_paras(X_raw, mean, std).astype('float32')
+            pred = predicted.eval(feed_dict={X:X_feed})
+            print('prediction:',pred)
+            return pred
 
     def calc_mel_for_frame(x):
         x_16k = librosa.resample(args.gain * x,rec_sample_rate, mel_resample_rate)
