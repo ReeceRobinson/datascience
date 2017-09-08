@@ -166,10 +166,10 @@ mel_ring_size = int((target_window_length / mel_stride) + 1)
 
 mel_ring = ResultRingBuffer(mel_ring_size, num_mels)
 
-audio_ring_size = int(rec_sample_rate*mel_width)
-audio_chunk_count = int(1/mel_width)*10 # ten seconds
+audio_chunk_size = int(rec_sample_rate*mel_width)
+audio_chunk_count = int((1/mel_width)*target_window_length)
 
-audio_ring = RingBuffer(audio_ring_size, audio_chunk_count, rec_sample_rate)
+audio_ring = RingBuffer(audio_chunk_size, audio_chunk_count, rec_sample_rate)
 
 inferenceEngine = InferenceEngine()
 #
@@ -226,7 +226,7 @@ try:
 
         line = (gradient[int(np.clip(x, 0, 1) * (len(gradient) - 1))] for x in mel[low_bin:low_bin + args.columns])
         print(*line, sep='', end='\x1b[0m')
-        if prediction and pred_counter >= 4:
+        if prediction and pred_counter >= 3:
             print('\033[1m\033[95m'+str(prediction), end=' ')
         else:
             print(prediction, end = ' ')
