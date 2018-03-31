@@ -68,10 +68,50 @@ class ResultRingBuffer:
 
     def save_ring_buffer(self, filename="mel_ring_buffer.txt"):
         np.savetxt(filename,self.ring_buffer[::-1])
+
+class InferenceEngine:
+    """
+    This class provides predictions based on the pre-trained tensorflow model.
+    """
+
+    def __init__(self):
+        # pre-trained RNN model for keyword spotting
+        self.model_file = r'kws_model-85-20170906102155.ckpt.meta'
+        self.params_file = r'kws_model-85-20170906102155.ckpt'
+
+        # Model Parameters
+        self.n_steps = 36
+        self.n_inputs = 40
+        self.mean = -25.664221
+        self.std = 10.932781
+
+        self.saver = tf.train.import_meta_graph(self.model_file)
+        self.sess = tf.Session()
+        self.saver.restore(self.sess, self.params_file)
+        self.graph = tf.get_default_graph()
+
+        print('InferenceEngine initalised.')
+
+    def predict(self):
+        def normalize_with_paras(test, mean, std):
+            test = (test - mean) / std
+            return test
+
+        with self.sess.as_default() as sess:
+            assert tf.get_default_session() is sess
+
+            X_raw = mel_ring.get_mels().reshape(1,self.n_steps,self.n_inputs)
+
+            predicted = self.graph.get_collection("predicted")[0]
+            X = self.graph.get_collection("X")[0]
+            X_feed = normalize_with_paras(X_raw, self.mean, self.std).astype('float32')
+            pred = predicted.eval(feed_dict={X:X_feed})
+
+            # print('prediction:',pred)
+            return pred[0]
 #
 # Main program logic
 #
-
 usage_line = ' press <enter> to quit, +<enter> or -<enter> to change scaling '
 frames_log = np.array([])
 
@@ -126,11 +166,12 @@ mel_ring_size = int((target_window_length / mel_stride) + 1)
 
 mel_ring = ResultRingBuffer(mel_ring_size, num_mels)
 
-audio_ring_size = int(rec_sample_rate*mel_width)
-audio_chunk_count = int(1/mel_width)*10 # ten seconds
+audio_chunk_size = int(rec_sample_rate*mel_width)
+audio_chunk_count = int((1/mel_width)*target_window_length)
 
-audio_ring = RingBuffer(audio_ring_size, audio_chunk_count, rec_sample_rate)
+audio_ring = RingBuffer(audio_chunk_size, audio_chunk_count, rec_sample_rate)
 
+inferenceEngine = InferenceEngine()
 #
 # Processing loop attributes
 #
@@ -151,6 +192,7 @@ for bg, fg in zip(colors, colors[1:]):
 
 try:
 
+    pred_counter = 0
     if args.list_devices:
         print(sd.query_devices())
         parser.exit(0)
@@ -160,34 +202,7 @@ try:
     low_bin = math.floor(low / delta_f)
 
     def run_inferencing():
-        
-        def normalize_with_paras(test, mean, std):
-            test = (test - mean) / std
-            return test
-
-        # run the trained RNN model for keyword spotting
-        model_file = r'kws_model-85-20170906102155.ckpt.meta'
-        params_file = r'kws_model-85-20170906102155.ckpt'
-
-        # Model Parameters
-        n_steps = 36
-        n_inputs = 40
-
-        mean = -25.664221
-        std = 10.932781
-
-        X_raw = mel_ring.get_mels().reshape(1,n_steps,n_inputs)
-
-        saver = tf.train.import_meta_graph(model_file)
-
-        with tf.Session() as sess:
-            saver.restore(sess, params_file)
-            predicted = tf.get_collection("predicted")[0]
-            X = tf.get_collection("X")[0]
-            X_feed = normalize_with_paras(X_raw, mean, std).astype('float32')
-            pred = predicted.eval(feed_dict={X:X_feed})
-            print('prediction:',pred)
-            return pred
+        return inferenceEngine.predict()
 
     def calc_mel_for_frame(x):
         x_16k = librosa.resample(args.gain * x,rec_sample_rate, mel_resample_rate)
@@ -206,13 +221,32 @@ try:
         log_S = librosa.logamplitude(S, ref_power=np.max)
         return log_S
 
-    def print_ascii_mel(mel):
+    def print_ascii_mel(mel, prediction):
+        global pred_counter
+
         line = (gradient[int(np.clip(x, 0, 1) * (len(gradient) - 1))] for x in mel[low_bin:low_bin + args.columns])
-        print(*line, sep='', end='\x1b[0m\n')
+        print(*line, sep='', end='\x1b[0m')
+        if prediction and pred_counter >= 3:
+            print('\033[1m\033[95m'+str(prediction), end=' ')
+        else:
+            print(prediction, end = ' ')
+        print(pred_counter)
+
+
 
     def callback(indata, frames, time, status):
         global frames_log
         global stride_frac_residual
+        global pred_counter
+        prediction = 0
+
+        def inc_counter():
+            global pred_counter
+            pred_counter = pred_counter + 1
+
+        def reset_counter():
+            global pred_counter
+            pred_counter =  0
 
         if status: 
             text = ' ' + str(status) + ' '
@@ -230,16 +264,26 @@ try:
                 x = audio_ring.read_window(mel_width * rec_sample_rate, i * mel_stride_bytes )
                 mel = calc_mel_for_frame(x)
                 mel_ring.add_mel(mel)
-                run_inferencing()
-                print_ascii_mel(mel)
+                prediction = run_inferencing()
+                print_ascii_mel(mel, prediction)
+
+            if prediction:
+                inc_counter()
+            else: # reset back to zero
+                reset_counter()
                 
             if stride_frac_residual >= 1.0:
                 x = audio_ring.read_window(mel_width * rec_sample_rate, int(stride_whole) * mel_stride_bytes)
                 mel = calc_mel_for_frame(x)
                 mel_ring.add_mel(mel)
                 run_inferencing()
-                print_ascii_mel(mel)
+                print_ascii_mel(mel, prediction)
                 stride_frac_residual -= 1.0
+
+                if prediction:
+                    inc_counter()
+                else: # reset back to zero
+                    reset_counter()
 
             # Debug info
             frames_log = np.append(frames_log,frames)
@@ -264,6 +308,7 @@ try:
                           '\x1b[0m', sep='')
                     break
 except KeyboardInterrupt:
+
     end_time = time.time()
     mean = np.mean(frames_log)
     std = np.std(frames_log)
@@ -274,4 +319,5 @@ except KeyboardInterrupt:
     print("recording lasted {:0.2f} seconds.".format(end_time - start_time))
     parser.exit('Interrupted by user')
 except Exception as e:
+
     parser.exit(type(e).__name__ + ': ' + str(e))
